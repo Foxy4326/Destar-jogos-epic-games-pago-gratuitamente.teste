@@ -70,6 +70,15 @@
             font-weight: bold;
             font-size: 0.8rem;
         }
+        .error-message {
+            background: #dc2626;
+            color: white;
+            padding: 10px;
+            border-radius: 8px;
+            margin: 10px auto;
+            max-width: 600px;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -85,6 +94,7 @@
     </nav>
 
     <div id="status" class="text-center mb-4 text-sm text-gray-400">Carregando lista de jogos...</div>
+    <div id="errorContainer"></div>
     <div class="games-grid" id="gamesGrid"></div>
 
     <div class="text-center mt-6">
@@ -102,9 +112,15 @@
 
     <script>
         // Configuração e variáveis globais
-        const apiURL = "https://api.allorigins.win/raw?url=https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=pt-BR";
+        const apiURLs = [
+            "https://api.allorigins.win/raw?url=https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=pt-BR",
+            "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=pt-BR",
+            "https://corsproxy.io/?https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=pt-BR"
+        ];
+        
         const gamesGrid = document.getElementById("gamesGrid");
         const statusText = document.getElementById("status");
+        const errorContainer = document.getElementById("errorContainer");
         const refreshBtn = document.getElementById("refreshBtn");
         const reportBtn = document.getElementById("reportBtn");
         const notification = document.getElementById("notification");
@@ -122,14 +138,63 @@
         setInterval(updateBrazilTime, 1000);
         updateBrazilTime();
 
+        // Função para mostrar erro
+        function showError(message) {
+            errorContainer.innerHTML = `<div class="error-message">${message}</div>`;
+        }
+
+        // Função para limpar erro
+        function clearError() {
+            errorContainer.innerHTML = '';
+        }
+
+        // Tentar diferentes APIs até uma funcionar
+        async function tryFetch(url) {
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return await response.json();
+            } catch (error) {
+                console.log(`Falha na URL: ${url}`, error);
+                throw error;
+            }
+        }
+
         // Buscar jogos gratuitos da API
         async function fetchFreeGames() {
             statusText.textContent = "🔍 Atualizando jogos gratuitos...";
+            clearError();
+            
+            let data = null;
+            let lastError = null;
+
+            // Tentar cada URL até uma funcionar
+            for (const url of apiURLs) {
+                try {
+                    data = await tryFetch(url);
+                    break; // Se funcionou, para de tentar
+                } catch (error) {
+                    lastError = error;
+                    continue; // Continua para a próxima URL
+                }
+            }
+
+            if (!data) {
+                const errorMsg = "❌ Não foi possível conectar com a Epic Games. Tentando com dados de exemplo...";
+                showError(errorMsg);
+                statusText.textContent = errorMsg;
+                
+                // Carregar dados de exemplo como fallback
+                loadSampleData();
+                return;
+            }
+
             try {
-                const res = await fetch(apiURL);
-                if (!res.ok) throw new Error("Erro ao acessar API da Epic Games");
-                const data = await res.json();
                 const elements = data?.data?.Catalog?.searchStore?.elements || [];
+
+                if (elements.length === 0) {
+                    throw new Error("Nenhum jogo encontrado na resposta da API");
+                }
 
                 // Filtrar jogos atualmente gratuitos
                 const ativos = elements.filter(g =>
@@ -145,12 +210,41 @@
 
                 allGames = { ativos, futuros };
                 renderGames(ativos, true);
-                statusText.textContent = "✅ Atualizado com sucesso!";
+                statusText.textContent = `✅ Atualizado com sucesso! ${ativos.length} grátis agora, ${futuros.length} em breve`;
+                
             } catch (e) {
-                console.error(e);
-                gamesGrid.innerHTML = "<p class='loading'>❌ Erro ao carregar jogos. API da Epic temporariamente fora do ar.</p>";
-                statusText.textContent = "⚠️ Falha na conexão. Tente novamente mais tarde.";
+                console.error("Erro ao processar dados:", e);
+                showError("Erro ao processar dados da API. Carregando dados de exemplo...");
+                loadSampleData();
             }
+        }
+
+        // Dados de exemplo para quando a API falhar
+        function loadSampleData() {
+            const sampleGames = {
+                ativos: [
+                    {
+                        title: "Fall Guys",
+                        price: { totalPrice: { originalPrice: 7999, discountPrice: 0 } },
+                        promotions: { promotionalOffers: [{ promotionalOffers: [{ endDate: new Date(Date.now() + 86400000).toISOString() }] }] },
+                        keyImages: [{ url: "https://cdn1.epicgames.com/salesEvent/salesEvent/EGS_FallGuys_Mediatonic_S1_2560x1440-5b5f6e5dcf5a7b2c6d7d5a5a5a5a5a5a" }],
+                        productSlug: "fall-guys"
+                    }
+                ],
+                futuros: [
+                    {
+                        title: "Cyberpunk 2077",
+                        price: { totalPrice: { originalPrice: 19999, discountPrice: 19999 } },
+                        promotions: { upcomingPromotionalOffers: [{ promotionalOffers: [{ startDate: new Date(Date.now() + 172800000).toISOString() }] }] },
+                        keyImages: [{ url: "https://cdn1.epicgames.com/offer/0a0c6a6e-8c0a-4c0a-8c0a-4c0a6a6e8c0a/EGS_Cyberpunk2077_CDPROJEKTRED_S1_2560x1440-5b5f6e5dcf5a7b2c6d7d5a5a5a5a5a5a" }],
+                        productSlug: "cyberpunk-2077"
+                    }
+                ]
+            };
+
+            allGames = sampleGames;
+            renderGames(sampleGames.ativos, true);
+            statusText.textContent = "⚠️ Modo offline - Dados de exemplo carregados";
         }
 
         // Renderizar jogos na tela
@@ -165,25 +259,27 @@
             }
 
             games.forEach(game => {
-                const img = game.keyImages?.[0]?.url || "https://via.placeholder.com/600x400?text=Sem+Capa";
+                const img = game.keyImages?.[0]?.url || "https://via.placeholder.com/300x200/1e293b/ffffff?text=Sem+Imagem";
                 const original = (game.price?.totalPrice?.originalPrice / 100).toFixed(2);
                 const promo = isAtivos ? 
                     game.promotions?.promotionalOffers?.[0]?.promotionalOffers?.[0] :
                     game.promotions?.upcomingPromotionalOffers?.[0]?.promotionalOffers?.[0];
                 const end = promo?.endDate ? new Date(promo.endDate) : null;
                 const start = promo?.startDate ? new Date(promo.startDate) : null;
-                const url = "https://store.epicgames.com/p/" + (game.productSlug || game.catalogNs?.mappings?.[0]?.pageSlug || "");
+                const url = game.productSlug ? 
+                    `https://store.epicgames.com/p/${game.productSlug}` : 
+                    "https://store.epicgames.com/pt-BR/free-games";
 
                 const card = document.createElement("div");
                 card.className = "game-card";
                 card.innerHTML = `
-                    <img src="${img}" class="game-image">
+                    <img src="${img}" class="game-image" onerror="this.src='https://via.placeholder.com/300x200/1e293b/ffffff?text=Imagem+Não+Carregada'">
                     ${!isAtivos ? '<div class="soon-badge">EM BREVE</div>' : ''}
                     <div class="game-info">
-                        <h3>${game.title}</h3>
-                        <p class="original">De R$${original}</p>
-                        <p class="price">💥 GRÁTIS ${isAtivos ? 'AGORA' : 'EM BREVE'}!</p>
-                        <div class="countdown"></div>
+                        <h3 class="font-bold text-lg mb-2">${game.title}</h3>
+                        <p class="original text-sm mb-1">De R$${original}</p>
+                        <p class="price text-lg mb-2">💥 GRÁTIS ${isAtivos ? 'AGORA' : 'EM BREVE'}!</p>
+                        <div class="countdown text-sm mb-3"></div>
                         <a href="${url}" target="_blank"><button class="btn">${isAtivos ? 'Resgatar Agora' : 'Ver na Loja'}</button></a>
                     </div>`;
                 gamesGrid.appendChild(card);
@@ -195,6 +291,7 @@
                     
                     if (diff <= 0) {
                         countdown.textContent = isAtivos ? "⏰ Promoção encerrada!" : "🎮 Já disponível!";
+                        clearInterval(interval);
                     } else {
                         const d = Math.floor(diff / 86400000);
                         const h = Math.floor((diff % 86400000) / 3600000);
